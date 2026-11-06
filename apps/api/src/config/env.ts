@@ -9,10 +9,12 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
   TELEGRAM_ALLOWED_USER_IDS: z.string().default(''),
+  TELEGRAM_USER_MAPPING: z.string().default(''),
   FIREBASE_PROJECT_ID: z.string().optional(),
   FIREBASE_CLIENT_EMAIL: z.string().optional(),
   FIREBASE_PRIVATE_KEY: z.string().optional(),
   FIREBASE_STORAGE_BUCKET: z.string().optional(),
+  FIREBASE_EMULATOR_HOST: z.string().optional(),
   MAX_VIDEO_BUDGET_USD: z.coerce.number().default(75),
   MAX_RETRY_COUNT: z.coerce.number().default(3),
   PREFERRED_VIDEO_PROVIDER: z.string().default('gemini'),
@@ -26,6 +28,30 @@ export function getAllowedUserIds(): string[] {
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+export function getTelegramUserMapping(): Record<string, string> {
+  return env.TELEGRAM_USER_MAPPING
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((acc, entry) => {
+      const [telegramId, firebaseUid] = entry.split('=');
+      if (telegramId && firebaseUid) {
+        acc[telegramId.trim()] = firebaseUid.trim();
+      }
+      return acc;
+    }, {});
+}
+
+export function resolveTelegramUserId(telegramUserId?: string | number): string | undefined {
+  const value = typeof telegramUserId === 'number' ? String(telegramUserId) : telegramUserId?.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  const mapping = getTelegramUserMapping();
+  return mapping[value] || undefined;
 }
 
 export function getTelegramBotToken(): string | undefined {

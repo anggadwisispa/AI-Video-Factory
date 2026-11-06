@@ -1,13 +1,75 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function isSignedIn() {
+    function signedIn() {
       return request.auth != null;
     }
 
+    function isJobOwner(jobId) {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/video_jobs/$(jobId)) &&
+        firestore.get(/databases/(default)/documents/video_jobs/$(jobId)).data.userId == request.auth.uid;
+    }
+
+    match /characters/{jobId}/{characterId}/{fileName} {
+      allow read: if isJobOwner(jobId);
+      allow create: if isJobOwner(jobId) &&
+        request.resource.size < 10 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*') &&
+        fileName.matches('.*\\.(png|jpg|jpeg|webp)$');
+      allow update: if isJobOwner(jobId) &&
+        request.resource.size < 10 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*');
+      allow delete: if false;
+    }
+
+    match /storyboards/{jobId}/{fileName} {
+      allow read: if isJobOwner(jobId);
+      allow create: if isJobOwner(jobId) &&
+        request.resource.size < 20 * 1024 * 1024 &&
+        fileName.matches('.*\\.(json|png|jpg|jpeg|webp)$');
+      allow update: if isJobOwner(jobId) && request.resource.size < 20 * 1024 * 1024;
+      allow delete: if false;
+    }
+
+    match /scenes/{jobId}/{sceneId}/{fileName} {
+      allow read: if isJobOwner(jobId);
+      allow create: if isJobOwner(jobId) &&
+        request.resource.size < 200 * 1024 * 1024 &&
+        fileName.matches('.*\\.(mp4|mov|webm|png|jpg|jpeg)$');
+      allow update: if isJobOwner(jobId) && request.resource.size < 200 * 1024 * 1024;
+      allow delete: if false;
+    }
+
+    match /audio/{jobId}/{fileName} {
+      allow read: if isJobOwner(jobId);
+      allow create: if isJobOwner(jobId) &&
+        request.resource.size < 50 * 1024 * 1024 &&
+        fileName.matches('.*\\.(mp3|wav|m4a|aac)$');
+      allow update: if isJobOwner(jobId) && request.resource.size < 50 * 1024 * 1024;
+      allow delete: if false;
+    }
+
+    match /subtitles/{jobId}/{fileName} {
+      allow read: if isJobOwner(jobId);
+      allow create: if isJobOwner(jobId) &&
+        request.resource.size < 2 * 1024 * 1024 &&
+        fileName.matches('.*\\.(srt|vtt)$');
+      allow update: if isJobOwner(jobId) && request.resource.size < 2 * 1024 * 1024;
+      allow delete: if false;
+    }
+
+    match /renders/{jobId}/{fileName} {
+      allow read: if isJobOwner(jobId);
+      allow create: if isJobOwner(jobId) &&
+        request.resource.size < 500 * 1024 * 1024 &&
+        fileName.matches('.*\\.(mp4|mov|m4v)$');
+      allow update: if isJobOwner(jobId) && request.resource.size < 500 * 1024 * 1024;
+      allow delete: if false;
+    }
+
     match /{allPaths=**} {
-      allow read: if isSignedIn();
-      allow write: if false;
+      allow read, write: if false;
     }
   }
 }

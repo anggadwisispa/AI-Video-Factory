@@ -100,14 +100,27 @@ describe('content engine generation flow', () => {
 
     const content = await generateContentForJob({
       jobId: 'job-123',
+      userId: 'firebase-user-123',
+      verifiedUserId: 'firebase-user-123',
       topic: 'Cara kerja jantung manusia',
       durationMinutes: 5,
       targetAudience: 'pelajar SMA'
     });
 
+    expect(content.userId).toBe('firebase-user-123');
     expect(content.topicAnalysis.topicTitle).toContain('jantung');
     expect(content.script.language).toBe('id');
     expect(content.storyboard.scenes.length).toBeGreaterThan(0);
     expect(content.visualPrompts[0]?.prompt).toContain('3D');
+  });
+
+  it('rejects unverified user identities before saving any content', async () => {
+    const { generateContentForJob } = await import('./content-engine.js');
+
+    await expect(generateContentForJob({
+      jobId: 'job-456',
+      topic: 'Cara kerja jantung manusia',
+      verifiedUserId: '   '
+    })).rejects.toThrow('A valid verified Firebase UID is required');
   });
 });

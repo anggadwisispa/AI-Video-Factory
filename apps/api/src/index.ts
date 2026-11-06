@@ -41,6 +41,12 @@ app.get('/ready', async (_req, res) => {
 
 app.post('/jobs/create', async (req, res) => {
   const { topic, durationMinutes, targetAudience, difficultyLevel, title } = req.body ?? {};
+  const verifiedUserId = typeof req.headers['x-firebase-uid'] === 'string' ? req.headers['x-firebase-uid'] : undefined;
+
+  if (!verifiedUserId) {
+    res.status(401).json({ ok: false, message: 'A verified backend Firebase UID is required.' });
+    return;
+  }
 
   if (!topic || typeof topic !== 'string') {
     res.status(400).json({ ok: false, message: 'A valid topic is required.' });
@@ -52,6 +58,7 @@ app.post('/jobs/create', async (req, res) => {
   res.status(201).json({
     ok: true,
     jobId,
+    userId: verifiedUserId,
     status: 'pending',
     topic,
     durationMinutes: Number(durationMinutes ?? 5),
@@ -63,6 +70,12 @@ app.post('/jobs/create', async (req, res) => {
 
 app.post('/jobs/content', async (req, res) => {
   const { jobId, topic, durationMinutes, targetAudience, difficultyLevel, title } = req.body ?? {};
+  const verifiedUserId = typeof req.headers['x-firebase-uid'] === 'string' ? req.headers['x-firebase-uid'] : undefined;
+
+  if (!verifiedUserId) {
+    res.status(401).json({ ok: false, message: 'A verified backend Firebase UID is required.' });
+    return;
+  }
 
   if (!jobId || !topic) {
     res.status(400).json({ ok: false, message: 'jobId and topic are required.' });
@@ -72,6 +85,8 @@ app.post('/jobs/content', async (req, res) => {
   try {
     const result = await generateContentForJob({
       jobId,
+      userId: verifiedUserId,
+      verifiedUserId,
       topic,
       durationMinutes: Number(durationMinutes ?? 5),
       targetAudience,
@@ -79,7 +94,7 @@ app.post('/jobs/content', async (req, res) => {
       title
     });
 
-    res.status(200).json({ ok: true, jobId, result });
+    res.status(200).json({ ok: true, jobId, userId: verifiedUserId, result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown content generation error';
     res.status(500).json({ ok: false, message });

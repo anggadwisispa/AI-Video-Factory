@@ -68,6 +68,35 @@ npm run dev
 - Firebase persistence for jobs, scenes, and characters
 - Telegram workflow integration for /new and natural-language requests
 
+## Firebase architecture
+
+Firestore collections used by the backend:
+
+- video_jobs/{jobId}
+- video_scenes/{sceneId}
+- characters/{characterId}
+- research/{researchId}
+- scripts/{scriptId}
+- storyboards/{storyboardId}
+- usage/{usageId}
+
+Every child document includes `jobId`, `userId`, `createdAt`, and `updatedAt`. Job records also include `topic`, `status`, `progress`, and `error`.
+
+Storage layout:
+
+- characters/{jobId}/{characterId}/
+- storyboards/{jobId}/
+- scenes/{jobId}/{sceneId}/
+- audio/{jobId}/
+- subtitles/{jobId}/
+- renders/{jobId}/
+
+## Firebase emulator
+
+```bash
+firebase emulators:start --only firestore,storage
+```
+
 ## Example AI content payload
 
 ```json

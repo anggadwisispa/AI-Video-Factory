@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { resolveTelegramUserId } from '../config/env.js';
 import { isAuthorizedUser, parseVideoRequest } from './telegram.js';
 
 describe('parseVideoRequest', () => {
@@ -23,5 +24,18 @@ describe('parseVideoRequest', () => {
 describe('isAuthorizedUser', () => {
   it('rejects users outside the configured allowlist', () => {
     expect(isAuthorizedUser('user-999')).toBe(false);
+  });
+
+  it('resolves a Telegram user to a verified backend UID through the configured mapping', () => {
+    const previous = process.env.TELEGRAM_USER_MAPPING;
+    process.env.TELEGRAM_USER_MAPPING = '123456=firebase-user-123';
+
+    expect(resolveTelegramUserId('123456')).toBe('firebase-user-123');
+
+    if (previous) {
+      process.env.TELEGRAM_USER_MAPPING = previous;
+    } else {
+      delete process.env.TELEGRAM_USER_MAPPING;
+    }
   });
 });

@@ -1,51 +1,168 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isSignedIn() {
+    function signedIn() {
       return request.auth != null;
     }
 
     function isAdmin() {
-      return isSignedIn() && request.auth.token.admin == true;
+      return signedIn() && request.auth.token.admin == true;
     }
 
-    match /projects/{projectId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+    function jobOwner(jobId) {
+      return signedIn() && exists(/databases/$(database)/documents/video_jobs/$(jobId)) &&
+        get(/databases/$(database)/documents/video_jobs/$(jobId)).data.userId == request.auth.uid;
+    }
+
+    function validJobRecord(data) {
+      return data.keys().hasAll(['jobId', 'userId', 'topic', 'status', 'createdAt', 'updatedAt']) &&
+        data.userId == request.auth.uid &&
+        data.jobId is string &&
+        data.topic is string &&
+        data.status is string &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function validOwnedChildRecord(data, expectedJobId) {
+      return data.keys().hasAll(['jobId', 'userId', 'createdAt', 'updatedAt']) &&
+        data.jobId == expectedJobId &&
+        data.userId == request.auth.uid &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
     }
 
     match /video_jobs/{jobId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow create: if signedIn() &&
+        request.resource.data.jobId == jobId &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.topic is string &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.updatedAt is timestamp &&
+        request.resource.data.status is string;
+
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.jobId == resource.data.jobId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow delete: if false;
     }
 
     match /video_scenes/{sceneId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow create: if signedIn() &&
+        exists(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)) &&
+        get(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)).data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.jobId is string &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.jobId == resource.data.jobId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow delete: if false;
     }
 
     match /characters/{characterId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow create: if signedIn() &&
+        exists(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)) &&
+        get(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)).data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.jobId is string &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.jobId == resource.data.jobId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow delete: if false;
     }
 
-    match /assets/{assetId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+    match /research/{researchId} {
+      allow create: if signedIn() &&
+        exists(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)) &&
+        get(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)).data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.jobId is string &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.jobId == resource.data.jobId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow delete: if false;
     }
 
-    match /usage_logs/{logId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+    match /scripts/{scriptId} {
+      allow create: if signedIn() &&
+        exists(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)) &&
+        get(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)).data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.jobId is string &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.jobId == resource.data.jobId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow delete: if false;
     }
 
-    match /publishing_jobs/{publishingJobId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+    match /storyboards/{storyboardId} {
+      allow create: if signedIn() &&
+        exists(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)) &&
+        get(/databases/$(database)/documents/video_jobs/$(request.resource.data.jobId)).data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.jobId is string &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.jobId == resource.data.jobId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt is timestamp;
+
+      allow delete: if false;
     }
 
-    match /{document=**} {
-      allow read, write: if false;
+    match /usage/{usageId} {
+      allow create: if false;
+      allow read: if isAdmin();
+      allow update: if false;
+      allow delete: if false;
     }
   }
 }

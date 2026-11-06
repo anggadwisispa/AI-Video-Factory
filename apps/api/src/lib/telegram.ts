@@ -1,6 +1,6 @@
 import { Telegraf, type Context } from 'telegraf';
 
-import { env, getAllowedUserIds, getTelegramBotToken } from '../config/env.js';
+import { env, getAllowedUserIds, getTelegramBotToken, resolveTelegramUserId } from '../config/env.js';
 import { generateContentForJob } from '../services/content-engine.js';
 
 export type VideoRequest = {
@@ -112,6 +112,11 @@ export function createTelegramBot() {
       return ctx.reply('Akses ditolak.');
     }
 
+    const verifiedUserId = resolveTelegramUserId(userId ?? undefined);
+    if (!verifiedUserId) {
+      return ctx.reply('Akun Telegram belum dipetakan ke identitas backend yang valid. Hubungi administrator untuk konfigurasi mapping user.');
+    }
+
     const text = ctx.message?.text ?? '';
     const parsed = parseVideoRequest(text.replace(/^\/new\s*/i, ''));
     const jobId = `job-${Date.now()}`;
@@ -123,6 +128,8 @@ export function createTelegramBot() {
     try {
       const result = await generateContentForJob({
         jobId,
+        userId: verifiedUserId,
+        verifiedUserId,
         topic: parsed.topic,
         durationMinutes: parsed.durationMinutes,
         targetAudience: 'umum',
@@ -162,6 +169,12 @@ export function createTelegramBot() {
       return;
     }
 
+    const verifiedUserId = resolveTelegramUserId(userId ?? undefined);
+    if (!verifiedUserId) {
+      await ctx.reply('Akun Telegram belum dipetakan ke identitas backend yang valid.');
+      return;
+    }
+
     const parsed = parseVideoRequest(text);
     const jobId = `job-${Date.now()}`;
 
@@ -172,6 +185,8 @@ export function createTelegramBot() {
     try {
       const result = await generateContentForJob({
         jobId,
+        userId: verifiedUserId,
+        verifiedUserId,
         topic: parsed.topic,
         durationMinutes: parsed.durationMinutes,
         targetAudience: 'umum',
