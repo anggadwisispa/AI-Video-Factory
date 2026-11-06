@@ -1,0 +1,36 @@
+{
+  "name": "Workflow 04 - Visual Generation",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "visual-generation",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    {
+      "id": "storyboard-ready",
+      "name": "Storyboard Ready",
+      "type": "n8n-nodes-base.webhook",
+      "parameters": {}
+    },
+    {
+      "id": "generate-reference",
+      "name": "Generate Reference Images",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "http://api:3000/jobs/reference-images",
+        "method": "POST"
+      }
+    },
+    {
+      "id": "poll-provider",
+      "name": "Poll Provider",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "http://api:3000/jobs/poll-video",
+        "method": "POST"
+      }
+    }
+  ]
+}

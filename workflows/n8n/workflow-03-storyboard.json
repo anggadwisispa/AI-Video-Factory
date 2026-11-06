@@ -1,0 +1,36 @@
+{
+  "name": "Workflow 03 - Storyboard",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "storyboard",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    {
+      "id": "script-received",
+      "name": "Script Received",
+      "type": "n8n-nodes-base.webhook",
+      "parameters": {}
+    },
+    {
+      "id": "character-bible",
+      "name": "Character Bible",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "http://api:3000/jobs/characters",
+        "method": "POST"
+      }
+    },
+    {
+      "id": "scene-save",
+      "name": "Save Storyboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "http://api:3000/jobs/storyboard",
+        "method": "POST"
+      }
+    }
+  ]
+}

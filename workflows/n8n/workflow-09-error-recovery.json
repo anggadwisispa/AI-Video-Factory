@@ -1,0 +1,15 @@
+{
+  "name": "Workflow 09 - Error Recovery",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "error-recovery",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    { "id": "error-received", "name": "Error Received", "type": "n8n-nodes-base.webhook", "parameters": {} },
+    { "id": "record-error", "name": "Record Error", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/error", "method": "POST" } },
+    { "id": "retry-policy", "name": "Retry According to Policy", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/retry", "method": "POST" } }
+  ]
+}

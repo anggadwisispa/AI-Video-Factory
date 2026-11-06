@@ -1,0 +1,15 @@
+{
+  "name": "Workflow 07 - Delivery",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "delivery",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    { "id": "delivery-trigger", "name": "Delivery Trigger", "type": "n8n-nodes-base.webhook", "parameters": {} },
+    { "id": "metadata", "name": "Generate Metadata", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/metadata", "method": "POST" } },
+    { "id": "telegram-send", "name": "Send to Telegram", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/telegram-deliver", "method": "POST" } }
+  ]
+}

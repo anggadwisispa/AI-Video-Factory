@@ -1,0 +1,15 @@
+{
+  "name": "Workflow 06 - Video Rendering",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "video-rendering",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    { "id": "render-trigger", "name": "Render Trigger", "type": "n8n-nodes-base.webhook", "parameters": {} },
+    { "id": "collect-assets", "name": "Collect Assets", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/render-assets", "method": "POST" } },
+    { "id": "render-video", "name": "Render Video", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/render", "method": "POST" } }
+  ]
+}

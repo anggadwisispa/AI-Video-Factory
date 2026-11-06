@@ -1,0 +1,15 @@
+{
+  "name": "Workflow 05 - Voice Generation",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "voice-generation",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    { "id": "voice-request", "name": "Voice Request", "type": "n8n-nodes-base.webhook", "parameters": {} },
+    { "id": "generate-narration", "name": "Generate Narration", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/voice", "method": "POST" } },
+    { "id": "validate-audio", "name": "Validate Audio", "type": "n8n-nodes-base.if", "parameters": {} }
+  ]
+}

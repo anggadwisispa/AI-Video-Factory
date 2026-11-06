@@ -1,0 +1,15 @@
+{
+  "name": "Workflow 08 - Social Publishing",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "social-publishing",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    { "id": "publish-request", "name": "Publish Request", "type": "n8n-nodes-base.webhook", "parameters": {} },
+    { "id": "validate-auth", "name": "Validate Authorization", "type": "n8n-nodes-base.if", "parameters": {} },
+    { "id": "upload-video", "name": "Upload Video", "type": "n8n-nodes-base.httpRequest", "parameters": { "url": "http://api:3000/jobs/publish", "method": "POST" } }
+  ]
+}

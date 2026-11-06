@@ -1,0 +1,36 @@
+{
+  "name": "Workflow 02 - Research and Script",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "research-script",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    {
+      "id": "job-received",
+      "name": "Job Received",
+      "type": "n8n-nodes-base.webhook",
+      "parameters": {}
+    },
+    {
+      "id": "openai-research",
+      "name": "OpenAI Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "method": "POST"
+      }
+    },
+    {
+      "id": "save-script",
+      "name": "Save Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "http://api:3000/jobs/script",
+        "method": "POST"
+      }
+    }
+  ]
+}

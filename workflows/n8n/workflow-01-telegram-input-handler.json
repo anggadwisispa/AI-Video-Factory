@@ -1,0 +1,33 @@
+{
+  "name": "Workflow 01 - Telegram Input Handler",
+  "trigger": {
+    "type": "webhook",
+    "config": {
+      "path": "telegram-input",
+      "method": "POST"
+    }
+  },
+  "nodes": [
+    {
+      "id": "telegram-webhook",
+      "name": "Telegram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "parameters": {}
+    },
+    {
+      "id": "validate-user",
+      "name": "Validate User",
+      "type": "n8n-nodes-base.if",
+      "parameters": {}
+    },
+    {
+      "id": "create-job",
+      "name": "Create Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "url": "http://api:3000/jobs/create",
+        "method": "POST"
+      }
+    }
+  ]
+}
