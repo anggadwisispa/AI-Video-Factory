@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveTelegramUserId } from '../config/env.js';
 import { isAuthorizedUser, parseVideoRequest } from './telegram.js';
 
 describe('parseVideoRequest', () => {
@@ -26,16 +25,18 @@ describe('isAuthorizedUser', () => {
     expect(isAuthorizedUser('user-999')).toBe(false);
   });
 
-  it('resolves a Telegram user to a verified backend UID through the configured mapping', () => {
-    const previous = process.env.TELEGRAM_USER_MAPPING;
-    process.env.TELEGRAM_USER_MAPPING = '123456=firebase-user-123';
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('resolves a Telegram user to a verified backend UID through the configured mapping', async () => {
+    // `env` is parsed once when the module loads, so the variable must be set before importing it.
+    vi.resetModules();
+    vi.stubEnv('TELEGRAM_USER_MAPPING', '123456=firebase-user-123');
+    const { resolveTelegramUserId } = await import('../config/env.js');
 
     expect(resolveTelegramUserId('123456')).toBe('firebase-user-123');
-
-    if (previous) {
-      process.env.TELEGRAM_USER_MAPPING = previous;
-    } else {
-      delete process.env.TELEGRAM_USER_MAPPING;
-    }
+    expect(resolveTelegramUserId('999')).toBeUndefined();
   });
 });

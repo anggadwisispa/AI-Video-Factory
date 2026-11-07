@@ -27,9 +27,45 @@ export type OpenAIServiceConfig = {
   maxRetries?: number;
 };
 
-function estimateTokensCost(inputTokens: number, outputTokens: number, model: string): number {
-  const unit = model.includes('gpt-4o-mini') ? 0.000002 : model.includes('gpt-4o') ? 0.00001 : 0.000004;
-  return Number(((inputTokens * unit) + (outputTokens * unit * 2.5)).toFixed(6));
+export type OpenAIUsage = {
+  model: string;
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  /** Estimated from token counts and per-model rates; null when no rate is known for the model. */
+  estimatedCostUsd: number | null;
+};
+
+type TokenRates = { inputPer1M: number; outputPer1M: number };
+
+// USD per 1M tokens. Matched by model-name prefix, longest prefix first so that
+// "gpt-4o-mini" is not priced as "gpt-4o". Rates change: override them with
+// OPENAI_INPUT_COST_PER_1M_USD / OPENAI_OUTPUT_COST_PER_1M_USD.
+const DEFAULT_RATES: Array<[prefix: string, rates: TokenRates]> = [
+  ['gpt-4o-mini', { inputPer1M: 0.15, outputPer1M: 0.6 }],
+  ['gpt-4o', { inputPer1M: 2.5, outputPer1M: 10 }]
+];
+
+function resolveRates(model: string): TokenRates | null {
+  const input = Number(process.env.OPENAI_INPUT_COST_PER_1M_USD);
+  const output = Number(process.env.OPENAI_OUTPUT_COST_PER_1M_USD);
+  if (process.env.OPENAI_INPUT_COST_PER_1M_USD && process.env.OPENAI_OUTPUT_COST_PER_1M_USD
+    && Number.isFinite(input) && Number.isFinite(output) && input >= 0 && output >= 0) {
+    return { inputPer1M: input, outputPer1M: output };
+  }
+
+  const match = DEFAULT_RATES.find(([prefix]) => model.startsWith(prefix));
+  return match ? match[1] : null;
+}
+
+export function estimateTokensCost(inputTokens: number, outputTokens: number, model: string): number | null {
+  const rates = resolveRates(model);
+  if (!rates) {
+    return null;
+  }
+
+  const cost = (inputTokens * rates.inputPer1M + outputTokens * rates.outputPer1M) / 1_000_000;
+  return Number(cost.toFixed(6));
 }
 
 export class OpenAIService {
@@ -37,6 +73,9 @@ export class OpenAIService {
   private readonly model: string;
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
+  private calls = 0;
+  private promptTokens = 0;
+  private completionTokens = 0;
 
   constructor(config: OpenAIServiceConfig = {}) {
     const apiKey = config.apiKey ?? process.env.OPENAI_API_KEY;
@@ -138,6 +177,21 @@ export class OpenAIService {
     }));
   }
 
+  /**
+   * Token usage accumulated by this instance across every request it made,
+   * including retried and unparseable responses (they were billed too).
+   * Create one service per job to get per-job usage.
+   */
+  getUsage(): OpenAIUsage {
+    return {
+      model: this.model,
+      calls: this.calls,
+      promptTokens: this.promptTokens,
+      completionTokens: this.completionTokens,
+      estimatedCostUsd: estimateTokensCost(this.promptTokens, this.completionTokens, this.model)
+    };
+  }
+
   private async callJson<T>(system: string, user: string, schema: z.ZodType<T>): Promise<T> {
     const rawResponse = await this.withRetry(async () => {
       const completion = await this.client.chat.completions.create({
@@ -150,25 +204,26 @@ export class OpenAIService {
         ]
       });
 
-      const content = completion.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error('OpenAI returned an empty response.');
-      }
-
+      // Count usage as soon as the response arrives, before any parsing can throw.
       const usage = completion.usage;
+      this.calls += 1;
       if (usage) {
-        const estimatedCost = estimateTokensCost(
-          usage.prompt_tokens ?? 0,
-          usage.completion_tokens ?? 0,
-          this.model
-        );
+        const promptTokens = usage.prompt_tokens ?? 0;
+        const completionTokens = usage.completion_tokens ?? 0;
+        this.promptTokens += promptTokens;
+        this.completionTokens += completionTokens;
 
         console.info('OpenAI usage logged', {
           model: this.model,
-          promptTokens: usage.prompt_tokens ?? 0,
-          completionTokens: usage.completion_tokens ?? 0,
-          estimatedCostUSD: estimatedCost
+          promptTokens,
+          completionTokens,
+          estimatedCostUSD: estimateTokensCost(promptTokens, completionTokens, this.model)
         });
+      }
+
+      const content = completion.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('OpenAI returned an empty response.');
       }
 
       return JSON.parse(content) as T;
@@ -201,3 +256,4 @@ export function createOpenAIService(): OpenAIService {
 }
 
 export type { ContentGenerationResult, TopicAnalysis, ResearchReport, GeneratedScript, CharacterBibleEntry, Storyboard, ScenePromptItem };
+

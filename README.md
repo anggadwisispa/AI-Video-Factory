@@ -24,18 +24,34 @@ This repository includes the completed Phase 1 foundation and the Phase 2 AI con
 The application requires real credentials before any production features can run. At a minimum, you must provide:
 
 - TELEGRAM_BOT_TOKEN
-- TELEGRAM_WEBHOOK_SECRET
+- TELEGRAM_WEBHOOK_SECRET (the `/telegram/webhook` endpoint rejects every request while this is empty)
 - TELEGRAM_ALLOWED_USER_IDS
+- TELEGRAM_USER_MAPPING (maps each allowed Telegram user to a Firebase UID)
 - FIREBASE_PROJECT_ID
 - FIREBASE_CLIENT_EMAIL
 - FIREBASE_PRIVATE_KEY
 - FIREBASE_STORAGE_BUCKET
 - OPENAI_API_KEY
-- GOOGLE_GEMINI_API_KEY (or your provider equivalent)
+- GEMINI_API_KEY
 - ELEVENLABS_API_KEY
 - CREATOMATE_API_KEY
 
-Copy .env.example to .env and fill in the values before running the app.
+Copy .env.example to .env and fill in the values before running the app. The variable names in .env.example are the source of truth.
+
+Optional OpenAI settings: `OPENAI_MODEL` (default `gpt-4o-mini`), and `OPENAI_INPUT_COST_PER_1M_USD` / `OPENAI_OUTPUT_COST_PER_1M_USD` to price a model that is not in the built-in rate table (cost is recorded as unknown for such models rather than guessed).
+
+## API
+
+Job routes require `Authorization: Bearer <Firebase ID token>`. The caller's identity is taken from the verified token only; any `x-firebase-uid` header is ignored.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /jobs/create` | Create a job from `{ topic, title?, durationMinutes? (1-30), targetAudience?, difficultyLevel? }`. Stores it as `pending`; nothing is generated yet. Returns 201. |
+| `POST /jobs/content` | Body `{ jobId }`. Starts content generation for a job you own and returns 202 immediately. 404 if the job is missing or not yours, 409 if it is already running or finished. |
+| `GET /jobs/:jobId` | Current `status`, `progress` and `error` of one of your jobs. |
+| `POST /telegram/webhook` | Telegram updates. Requires the `X-Telegram-Bot-Api-Secret-Token` header to match `TELEGRAM_WEBHOOK_SECRET`. |
+
+Content generation runs in the API process and reports progress on the job document: `pending` → `researching` → `scripting` → `storyboarding` → `content_ready`, or `failed` (with `error`). A `failed` job can be started again with `POST /jobs/content`. A job stuck in flight for more than 30 minutes (for example after a restart) is also startable again. This is not a durable queue: if the process stops mid-run the work is lost and must be restarted that way. Move the run behind a real queue before running more than one API instance.
 
 ## Available commands
 
@@ -81,6 +97,10 @@ Firestore collections used by the backend:
 - usage/{usageId}
 
 Every child document includes `jobId`, `userId`, `createdAt`, and `updatedAt`. Job records also include `topic`, `status`, `progress`, and `error`.
+
+Scene and character documents are stored as `{jobId}-{sceneId}` and `{jobId}-{characterId}`, because the ids the model generates (such as `scene-001`) repeat across jobs.
+
+`usage/{jobId}-usage` holds the token counts (`promptTokens`, `completionTokens`, `calls`) and an `estimatedCost` in USD. The cost is computed from token counts and per-model rates; it is not reconciled with the provider's invoice, and `costKnown` is `false` when a model has no known rate. Usage is recorded for failed runs too.
 
 Storage layout:
 

@@ -1,54 +1,54 @@
-import { getFirestore, Timestamp, type WriteBatch } from 'firebase-admin/firestore';
+import { z } from 'zod';
+
+import { createOpenAIService, type OpenAIService } from '@ai-video-factory/ai-content';
 
 import {
-  createOpenAIService,
-  type CharacterBibleEntry,
-  type GeneratedScript,
-  type ResearchReport,
-  type ScenePromptItem,
-  type Storyboard,
-  type TopicAnalysis
-} from '@ai-video-factory/ai-content';
+  createFirestoreJobStore,
+  type JobStatus,
+  type JobStore,
+  type PersistedJobContent,
+  type StoredJob
+} from './job-store.js';
 
-import { initializeFirebase } from '../lib/firebase.js';
+export type { JobStatus, PersistedJobContent, StoredJob } from './job-store.js';
 
-export type JobStatus =
-  | 'pending'
-  | 'researching'
-  | 'scripting'
-  | 'storyboarding'
-  | 'generating_characters'
-  | 'generating_scenes'
-  | 'generating_voice'
-  | 'rendering'
-  | 'quality_check'
-  | 'completed'
-  | 'publishing'
-  | 'published'
-  | 'failed'
-  | 'cancelled';
+/**
+ * Progress covers the content phase only (0-40). Voice, rendering and
+ * publishing own the rest of the range when they are built.
+ */
+export const CONTENT_PROGRESS = {
+  /** Set by the claim; the job is 'researching' from this point. */
+  claimed: 5,
+  scripting: 20,
+  storyboarding: 30,
+  content_ready: 40
+} as const;
 
-export type JobContentInput = {
-  jobId: string;
-  userId?: string;
-  verifiedUserId?: string;
-  topic: string;
-  durationMinutes?: number;
-  targetAudience?: string;
-  difficultyLevel?: string;
-  title?: string;
-};
+/**
+ * A job that has sat in an in-flight status this long is treated as abandoned
+ * (e.g. the process restarted). One stage can hold three OpenAI calls with
+ * retries, so this is deliberately well above a normal whole-run time.
+ */
+export const STALE_JOB_MS = 30 * 60 * 1000;
 
-export type PersistedJobContent = {
-  jobId: string;
-  userId: string;
-  topicAnalysis: TopicAnalysis;
-  research: ResearchReport;
-  script: GeneratedScript;
-  characterBible: { projectTitle: string; characters: CharacterBibleEntry[] };
-  storyboard: Storyboard;
-  visualPrompts: ScenePromptItem[];
-};
+export class JobValidationError extends Error {}
+export class JobNotFoundError extends Error {
+  constructor(jobId: string) {
+    super(`Job ${jobId} was not found.`);
+  }
+}
+export class JobConflictError extends Error {
+  constructor(jobId: string, public readonly status: JobStatus) {
+    super(`Job ${jobId} cannot be started while it is '${status}'.`);
+  }
+}
+export class ServiceConfigError extends Error {}
+
+class ClaimLostError extends Error {
+  constructor(jobId: string) {
+    super(`Job ${jobId} was taken over by another run.`);
+  }
+}
 
 export function validateVerifiedUserId(userId?: string): string {
   const candidate = userId?.trim();
@@ -62,225 +62,236 @@ export function validateVerifiedUserId(userId?: string): string {
 export function validateJobId(jobId: string): string {
   const candidate = jobId.trim();
   if (!candidate || !/^job-[A-Za-z0-9_.:-]+$/.test(candidate)) {
-    throw new Error('Invalid jobId format.');
+    throw new JobValidationError('Invalid jobId format.');
   }
   return candidate;
 }
 
-function validateTopic(topic: string): string {
-  const candidate = topic.trim();
-  if (!candidate || candidate.length < 3) {
-    throw new Error('Topic must contain at least 3 characters.');
+const JobRequestSchema = z.object({
+  topic: z.string().trim().min(3, 'Topic must contain at least 3 characters.').max(300),
+  title: z.string().trim().min(1).max(200).optional(),
+  durationMinutes: z.coerce.number().int().min(1).max(30).default(5),
+  targetAudience: z.string().trim().min(1).max(100).default('umum'),
+  difficultyLevel: z.string().trim().min(1).max(100).default('dasar')
+});
+
+export function parseJobRequest(input: unknown) {
+  const parsed = JobRequestSchema.safeParse(input ?? {});
+  if (!parsed.success) {
+    const detail = parsed.error.issues.map((issue) => `${issue.path.join('.') || 'body'}: ${issue.message}`).join('; ');
+    throw new JobValidationError(detail);
   }
-  return candidate;
+  return parsed.data;
 }
 
-function buildUsageRecord(jobId: string, userId: string, costUsd: number): Record<string, unknown> {
-  return {
-    usageId: `usage-${jobId}`,
-    jobId,
-    userId,
-    provider: 'openai',
-    operation: 'content_generation',
-    creditsUsed: 0,
-    estimatedCost: costUsd,
-    actualCost: costUsd,
-    createdAt: Timestamp.now(),
-    updatedAt: Timestamp.now()
-  };
+export type ContentJobOutcome =
+  | { ok: true; content: PersistedJobContent }
+  | { ok: false; error: string };
+
+type ContentOpenAI = Pick<
+  OpenAIService,
+  | 'analyzeTopic'
+  | 'generateResearch'
+  | 'generateScript'
+  | 'generateCharacterBible'
+  | 'generateStoryboard'
+  | 'generateScenePrompts'
+  | 'getUsage'
+>;
+
+export type ContentEngineDeps = {
+  store: JobStore;
+  /** One instance per job, so `getUsage()` reports that job's usage only. */
+  createOpenAI: () => ContentOpenAI;
+  now: () => number;
+};
+
+function describeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Unknown content generation error';
+  return message.length > 300 ? `${message.slice(0, 297)}...` : message;
 }
 
-export async function generateContentForJob(input: JobContentInput): Promise<PersistedJobContent> {
-  const jobId = validateJobId(input.jobId);
-  const verifiedUserId = validateVerifiedUserId(input.verifiedUserId ?? input.userId);
-  const topic = validateTopic(input.topic);
-
-  const openAIAgent = createOpenAIService();
-
-  const topicAnalysis = await openAIAgent.analyzeTopic({
-    topic,
-    targetAudience: input.targetAudience ?? 'umum',
-    durationMinutes: input.durationMinutes ?? 5,
-    difficultyLevel: input.difficultyLevel ?? 'dasar'
-  });
-
-  const research = await openAIAgent.generateResearch({
-    topic,
-    category: topicAnalysis.category,
-    difficultyLevel: input.difficultyLevel ?? 'dasar'
-  });
-
-  const script = await openAIAgent.generateScript({
-    topic,
-    title: input.title ?? topicAnalysis.topicTitle,
-    durationMinutes: input.durationMinutes ?? topicAnalysis.recommendedDurationMinutes,
-    audience: topicAnalysis.targetAudience,
-    researchSummary: research.summary
-  });
-
-  const characterBible = await openAIAgent.generateCharacterBible({
-    topic,
-    title: input.title ?? topicAnalysis.topicTitle
-  });
-
-  const storyboard = await openAIAgent.generateStoryboard({
-    topic,
-    script
-  });
-
-  const visualPrompts = await openAIAgent.generateScenePrompts({
-    topic,
-    storyboard
-  });
-
-  const result: PersistedJobContent = {
-    jobId,
-    userId: verifiedUserId,
-    topicAnalysis,
-    research,
-    script,
-    characterBible,
-    storyboard,
-    visualPrompts
+export function createContentEngine(overrides: Partial<ContentEngineDeps> = {}) {
+  const deps: ContentEngineDeps = {
+    store: overrides.store ?? createFirestoreJobStore(),
+    createOpenAI: overrides.createOpenAI ?? createOpenAIService,
+    now: overrides.now ?? Date.now
   };
 
-  await persistGeneratedContent(result);
-  return result;
-}
+  async function createJob(userId: string, request: unknown): Promise<StoredJob> {
+    const verifiedUserId = validateVerifiedUserId(userId);
+    const parsed = parseJobRequest(request);
+    const now = deps.now();
 
-async function persistGeneratedContent(payload: PersistedJobContent): Promise<void> {
-  const firebaseState = initializeFirebase();
-
-  if (!firebaseState.initialized || !firebaseState.app) {
-    throw new Error(firebaseState.reason ?? 'Firebase is not configured.');
-  }
-
-  const db = getFirestore(firebaseState.app);
-  const createdAt = Timestamp.now();
-  const updatedAt = Timestamp.now();
-
-  const researchDocId = `${payload.jobId}-research`;
-  const scriptDocId = `${payload.jobId}-script`;
-  const storyboardDocId = `${payload.jobId}-storyboard`;
-  const usageDocId = `${payload.jobId}-usage`;
-
-  const jobRecord = {
-    jobId: payload.jobId,
-    userId: payload.userId,
-    topic: payload.topicAnalysis.topicTitle,
-    category: payload.topicAnalysis.category,
-    status: 'scripting' as JobStatus,
-    createdAt,
-    updatedAt,
-    progress: 30,
-    error: null,
-    source: 'ai-content-engine'
-  };
-
-  const scriptRecord = {
-    scriptId: scriptDocId,
-    jobId: payload.jobId,
-    userId: payload.userId,
-    title: payload.script.title,
-    language: payload.script.language,
-    totalEstimatedDurationSeconds: payload.script.totalEstimatedDurationSeconds,
-    narrationSections: payload.script.narrationSections,
-    summary: payload.script.summary,
-    createdAt,
-    updatedAt
-  };
-
-  const storyboardRecord = {
-    storyboardId: storyboardDocId,
-    jobId: payload.jobId,
-    userId: payload.userId,
-    title: payload.storyboard.title,
-    totalDurationSeconds: payload.storyboard.totalDurationSeconds,
-    scenes: payload.storyboard.scenes,
-    createdAt,
-    updatedAt
-  };
-
-  const researchRecord = {
-    researchId: researchDocId,
-    jobId: payload.jobId,
-    userId: payload.userId,
-    topicTitle: payload.research.topicTitle,
-    summary: payload.research.summary,
-    keyFacts: payload.research.keyFacts,
-    technicalConcepts: payload.research.technicalConcepts,
-    references: payload.research.references,
-    uncertainClaims: payload.research.uncertainClaims,
-    verificationNotes: payload.research.verificationNotes,
-    createdAt,
-    updatedAt
-  };
-
-  const usageRecord = buildUsageRecord(payload.jobId, payload.userId, 0.01);
-
-  const batch: WriteBatch = db.batch();
-
-  batch.set(db.collection('video_jobs').doc(payload.jobId), jobRecord, { merge: true });
-  batch.set(db.collection('research').doc(researchDocId), researchRecord, { merge: true });
-  batch.set(db.collection('scripts').doc(scriptDocId), scriptRecord, { merge: true });
-  batch.set(db.collection('storyboards').doc(storyboardDocId), storyboardRecord, { merge: true });
-  batch.set(db.collection('usage').doc(usageDocId), usageRecord, { merge: true });
-
-  for (const scene of payload.storyboard.scenes) {
-    const sceneDoc = {
-      sceneId: scene.sceneId,
-      jobId: payload.jobId,
-      userId: payload.userId,
-      sceneNumber: scene.sceneNumber,
-      title: scene.title,
-      learningObjective: scene.learningObjective,
-      durationSeconds: scene.durationSeconds,
-      narration: scene.narration,
-      visualDescription: scene.visualDescription,
-      characters: scene.characters,
-      environment: scene.environment,
-      cameraMovement: scene.cameraMovement,
-      lighting: scene.lighting,
-      animationStyle: scene.animationStyle,
-      transition: scene.transition,
-      subtitleText: scene.subtitleText,
-      videoGenerationPrompt: scene.videoGenerationPrompt,
-      status: 'ready',
-      createdAt,
-      updatedAt
+    const job: StoredJob = {
+      ...parsed,
+      jobId: `job-${crypto.randomUUID()}`,
+      userId: verifiedUserId,
+      status: 'pending',
+      progress: 0,
+      error: null,
+      createdAtMs: now,
+      updatedAtMs: now
     };
 
-    batch.set(db.collection('video_scenes').doc(scene.sceneId), sceneDoc, { merge: true });
+    await deps.store.createJob(job);
+    return job;
   }
 
-  for (const character of payload.characterBible.characters) {
-    const characterDoc = {
-      characterId: character.characterId,
-      jobId: payload.jobId,
-      userId: payload.userId,
-      name: character.characterName,
-      genderPresentation: character.genderPresentation,
-      ageAppearance: character.ageAppearance,
-      facialFeatures: character.facialFeatures,
-      hairstyle: character.hairstyle,
-      clothing: character.clothing,
-      bodyDescription: character.bodyDescription,
-      personality: character.personality,
-      colorPalette: character.colorPalette,
-      visualStyle: character.visualStyle,
-      referenceImagePrompt: character.referenceImagePrompt,
-      generatedReferenceImageUrl: null,
-      createdAt,
-      updatedAt
+  /** Returns the job only to its owner; anyone else gets the same error as for a missing job. */
+  async function getJob(jobId: string, userId: string): Promise<StoredJob> {
+    const id = validateJobId(jobId);
+    const verifiedUserId = validateVerifiedUserId(userId);
+
+    const job = await deps.store.getJob(id);
+    if (!job || job.userId !== verifiedUserId) {
+      throw new JobNotFoundError(id);
+    }
+    return job;
+  }
+
+  /**
+   * Claims the job and starts generating its content in the background.
+   * Resolves as soon as the claim succeeds; progress is tracked on the job
+   * document. `onSettled` runs once the background run finishes either way.
+   *
+   * The run lives in this process. Durable state is in the store, so a crash
+   * leaves the job in an in-flight status that becomes claimable again after
+   * STALE_JOB_MS. Replace the `void run(...)` call below with a queue
+   * (Cloud Tasks, BullMQ, ...) when jobs must survive restarts or be spread
+   * across instances.
+   */
+  async function submitContentJob(
+    input: { jobId: string; userId: string },
+    onSettled?: (outcome: ContentJobOutcome) => void | Promise<void>
+  ): Promise<StoredJob> {
+    const jobId = validateJobId(input.jobId);
+    const userId = validateVerifiedUserId(input.userId);
+
+    // Fail before claiming anything if the generator cannot run at all.
+    let openAI: ContentOpenAI;
+    try {
+      openAI = deps.createOpenAI();
+    } catch (error) {
+      throw new ServiceConfigError(describeError(error));
+    }
+
+    const claim = await deps.store.claimJob(jobId, userId, deps.now() - STALE_JOB_MS);
+    if (claim.kind === 'not_found') {
+      throw new JobNotFoundError(jobId);
+    }
+    if (claim.kind === 'conflict') {
+      throw new JobConflictError(jobId, claim.status);
+    }
+
+    void run(claim.job, claim.runId, openAI)
+      .then(async (outcome) => {
+        await onSettled?.(outcome);
+      })
+      .catch((error) => {
+        console.error(`Content job ${jobId} callback failed:`, describeError(error));
+      });
+
+    return claim.job;
+  }
+
+  async function run(job: StoredJob, runId: string, openAI: ContentOpenAI): Promise<ContentJobOutcome> {
+    const { jobId, userId } = job;
+    let progress: number = CONTENT_PROGRESS.claimed;
+
+    const advance = async (status: JobStatus, nextProgress: number) => {
+      progress = nextProgress;
+      if (!(await deps.store.updateJob(jobId, runId, { status, progress }))) {
+        throw new ClaimLostError(jobId);
+      }
     };
 
-    batch.set(db.collection('characters').doc(character.characterId), characterDoc, { merge: true });
+    try {
+      // The claim already moved the job to 'researching'.
+      const topicAnalysis = await openAI.analyzeTopic({
+        topic: job.topic,
+        targetAudience: job.targetAudience,
+        durationMinutes: job.durationMinutes,
+        difficultyLevel: job.difficultyLevel
+      });
+      const research = await openAI.generateResearch({
+        topic: job.topic,
+        category: topicAnalysis.category,
+        difficultyLevel: job.difficultyLevel
+      });
+
+      await advance('scripting', CONTENT_PROGRESS.scripting);
+      const script = await openAI.generateScript({
+        topic: job.topic,
+        title: job.title ?? topicAnalysis.topicTitle,
+        durationMinutes: job.durationMinutes,
+        audience: topicAnalysis.targetAudience,
+        researchSummary: research.summary
+      });
+
+      await advance('storyboarding', CONTENT_PROGRESS.storyboarding);
+      const characterBible = await openAI.generateCharacterBible({
+        topic: job.topic,
+        title: job.title ?? topicAnalysis.topicTitle
+      });
+      const storyboard = await openAI.generateStoryboard({ topic: job.topic, script });
+      const visualPrompts = await openAI.generateScenePrompts({ topic: job.topic, storyboard });
+
+      const content: PersistedJobContent = {
+        jobId,
+        userId,
+        topicAnalysis,
+        research,
+        script,
+        characterBible,
+        storyboard,
+        visualPrompts
+      };
+
+      progress = CONTENT_PROGRESS.content_ready;
+      const saved = await deps.store.saveContent(content, runId, {
+        status: 'content_ready',
+        progress: CONTENT_PROGRESS.content_ready
+      });
+      if (!saved) {
+        throw new ClaimLostError(jobId);
+      }
+
+      return { ok: true, content };
+    } catch (error) {
+      const message = describeError(error);
+      console.error(`Content job ${jobId} failed at ${progress}%:`, message);
+
+      // A run that lost its claim must not write to a job another run now owns.
+      if (!(error instanceof ClaimLostError)) {
+        try {
+          await deps.store.updateJob(jobId, runId, { status: 'failed', progress, error: message });
+        } catch (updateError) {
+          console.error(`Could not mark job ${jobId} as failed:`, describeError(updateError));
+        }
+      }
+
+      return { ok: false, error: message };
+    } finally {
+      // Tokens are billed even when the run fails, so usage is always recorded.
+      const usage = openAI.getUsage();
+      if (usage.calls > 0) {
+        try {
+          await deps.store.addUsage(jobId, userId, usage);
+        } catch (usageError) {
+          console.error(`Could not record usage for job ${jobId}:`, describeError(usageError));
+        }
+      }
+    }
   }
 
-  try {
-    await batch.commit();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Content persistence failed';
-    throw new Error(`Failed to persist generated content: ${message}`);
-  }
+  return { createJob, getJob, submitContentJob };
+}
+
+let defaultEngine: ReturnType<typeof createContentEngine> | undefined;
+
+/** Lazily built so importing this module never touches Firebase or OpenAI. */
+export function getContentEngine() {
+  defaultEngine ??= createContentEngine();
+  return defaultEngine;
 }
