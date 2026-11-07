@@ -1,7 +1,7 @@
 import { Telegraf, type Context } from 'telegraf';
 
-import { env, getAllowedUserIds, getTelegramBotToken, resolveTelegramUserId } from '../config/env.js';
-import { generateContentForJob } from '../services/content-engine.js';
+import { getAllowedUserIds, getTelegramBotToken, resolveTelegramUserId } from '../config/env.js';
+import { getContentEngine, JobValidationError } from '../services/content-engine.js';
 
 export type VideoRequest = {
   topic: string;
@@ -11,7 +11,7 @@ export type VideoRequest = {
   rawText: string;
 };
 
-export function normalizeUserId(input?: string | number): string | null {
+export function normalizeUserId(input?: string | number | null): string | null {
   if (input === undefined || input === null) {
     return null;
   }
@@ -19,7 +19,12 @@ export function normalizeUserId(input?: string | number): string | null {
   return String(input);
 }
 
-export function isAuthorizedUser(userId?: string | number): boolean {
+function getMessageText(ctx: Context): string {
+  const message = ctx.message;
+  return message && 'text' in message ? message.text : '';
+}
+
+export function isAuthorizedUser(userId?: string | number | null): boolean {
   const normalizedUserId = normalizeUserId(userId);
 
   if (!normalizedUserId) {
@@ -62,6 +67,48 @@ export function parseVideoRequest(rawText: string): VideoRequest {
     language: 'id',
     rawText: input
   };
+}
+
+/**
+ * Creates the job and starts content generation without waiting for it, so the
+ * Telegram handler returns quickly. The final message is sent when the run ends.
+ * Error details stay in the logs and on the job document, not in the chat.
+ */
+async function startVideoJob(ctx: Context, userId: string, parsed: VideoRequest, intro: string): Promise<void> {
+  const engine = getContentEngine();
+
+  try {
+    const job = await engine.createJob(userId, {
+      topic: parsed.topic,
+      title: parsed.topic,
+      durationMinutes: parsed.durationMinutes,
+      targetAudience: 'umum',
+      difficultyLevel: 'dasar'
+    });
+
+    await ctx.reply(
+      `${intro}\nID: ${job.jobId}\nTopik: ${parsed.topic}\nDurasi: ${parsed.durationMinutes} menit\nFormat: ${parsed.aspectRatio}\nKonten sedang dibuat, hasilnya akan dikirim di sini.`
+    );
+
+    await engine.submitContentJob({ jobId: job.jobId, userId }, async (outcome) => {
+      if (outcome.ok) {
+        const { content } = outcome;
+        await ctx.reply(
+          `✅ Konten AI selesai.\nJob ID: ${job.jobId}\nJudul: ${content.script.title}\nScene: ${content.storyboard.scenes.length}\nKarakter: ${content.characterBible.characters.length}\nDurasi estimasi: ${Math.ceil(content.script.totalEstimatedDurationSeconds / 60)} menit.`
+        );
+      } else {
+        await ctx.reply(`⚠️ Pembuatan konten gagal untuk job ${job.jobId}. Detail ada di catatan job; coba lagi nanti.`);
+      }
+    });
+  } catch (error) {
+    if (error instanceof JobValidationError) {
+      await ctx.reply(`⚠️ Permintaan tidak valid: ${error.message}`);
+      return;
+    }
+
+    console.error('Failed to start video job from Telegram:', error instanceof Error ? error.message : error);
+    await ctx.reply('⚠️ Job tidak dapat dimulai saat ini. Coba lagi nanti.');
+  }
 }
 
 export function createTelegramBot() {
@@ -117,33 +164,8 @@ export function createTelegramBot() {
       return ctx.reply('Akun Telegram belum dipetakan ke identitas backend yang valid. Hubungi administrator untuk konfigurasi mapping user.');
     }
 
-    const text = ctx.message?.text ?? '';
-    const parsed = parseVideoRequest(text.replace(/^\/new\s*/i, ''));
-    const jobId = `job-${Date.now()}`;
-
-    await ctx.reply(
-      `✅ Job video dibuat.\nID: ${jobId}\nTopik: ${parsed.topic}\nDurasi: ${parsed.durationMinutes} menit\nFormat: ${parsed.aspectRatio}`
-    );
-
-    try {
-      const result = await generateContentForJob({
-        jobId,
-        userId: verifiedUserId,
-        verifiedUserId,
-        topic: parsed.topic,
-        durationMinutes: parsed.durationMinutes,
-        targetAudience: 'umum',
-        difficultyLevel: 'dasar',
-        title: parsed.topic
-      });
-
-      await ctx.reply(
-        `📚 Konten AI sudah diproses.\nJob ID: ${jobId}\nJudul: ${result.script.title}\nStatus: script, storyboard, dan karakter bible tersimpan.\nDurasi estimasi: ${Math.ceil(result.script.totalEstimatedDurationSeconds / 60)} menit.`
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      await ctx.reply(`⚠️ Gagal menghasilkan konten AI untuk job ${jobId}.\nDetail: ${message}`);
-    }
+    const parsed = parseVideoRequest(getMessageText(ctx).replace(/^\/new\s*/i, ''));
+    await startVideoJob(ctx, verifiedUserId, parsed, '✅ Job video dibuat.');
   });
 
   bot.command('status', (ctx: Context) => {
@@ -158,7 +180,7 @@ export function createTelegramBot() {
 
   bot.on('text', async (ctx: Context) => {
     const userId = normalizeUserId(ctx.from?.id);
-    const text = ctx.message?.text ?? '';
+    const text = getMessageText(ctx);
 
     if (!text || text.startsWith('/')) {
       return;
@@ -175,32 +197,7 @@ export function createTelegramBot() {
       return;
     }
 
-    const parsed = parseVideoRequest(text);
-    const jobId = `job-${Date.now()}`;
-
-    await ctx.reply(
-      `📦 Request diterima.\nJob ID: ${jobId}\nTopik: ${parsed.topic}\nDurasi: ${parsed.durationMinutes} menit\nAspek: ${parsed.aspectRatio}`
-    );
-
-    try {
-      const result = await generateContentForJob({
-        jobId,
-        userId: verifiedUserId,
-        verifiedUserId,
-        topic: parsed.topic,
-        durationMinutes: parsed.durationMinutes,
-        targetAudience: 'umum',
-        difficultyLevel: 'dasar',
-        title: parsed.topic
-      });
-
-      await ctx.reply(
-        `✅ Pipeline konten AI selesai.\nJob ID: ${jobId}\nJudul: ${result.script.title}\nScene: ${result.storyboard.scenes.length}\nKarakter: ${result.characterBible.characters.length}`
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      await ctx.reply(`⚠️ Proses pembuatan konten gagal.\n${message}`);
-    }
+    await startVideoJob(ctx, verifiedUserId, parseVideoRequest(text), '📦 Request diterima.');
   });
 
   return bot;
